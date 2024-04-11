@@ -1,0 +1,6 @@
+FROM python:3.11-slim AS base
+
+COPY requirements.txt ./
+RUN pip install -r ./requirements.txt && pip install kafka-python
+
+COPY ./ .

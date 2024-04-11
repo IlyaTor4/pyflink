@@ -22,7 +22,7 @@ RUN tar -xvf Python-3.10.0.tgz && \
   pip install apache-flink==${FLINK_VERSION}; \
   pip install kafka-python
 
-COPY kafka_example/requirements.txt ./
+COPY requirements.txt ./
 RUN pip install -r ./requirements.txt
 
 
@@ -34,4 +34,4 @@ RUN wget -P /opt/flink/lib/ https://repo.maven.apache.org/maven2/org/apache/flin
 #ENV DJANGO_SETTINGS_MODULE=settings.dev
 WORKDIR /opt/flink
 
-COPY kafka_example .
+COPY ./ .
