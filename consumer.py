@@ -1,7 +1,7 @@
 from kafka import KafkaConsumer
 
-# bootstrap_servers = ['0.0.0.0:9092']  # python local, broker in container
-bootstrap_servers = ['broker:29092']  # python in container, broker in container
+bootstrap_servers = ['0.0.0.0:9092']  # python local, broker in container
+# bootstrap_servers = ['broker:29092']  # python in container, broker in container
 topic = 'picks'
 
 print('creating consumer')

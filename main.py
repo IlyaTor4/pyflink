@@ -1,4 +1,3 @@
-import logging
 from typing import Iterator
 
 from pyflink.common import Row
@@ -38,12 +37,8 @@ class UserStats:
 
 class PickMapper(MapFunction):
     def map(self, data: str):
-        print('map')
-        logging.warning('map')
         deserialized_data = json.loads(data)
         fliff_objects = deserialized_data['fliff_objects']
-        print(len(fliff_objects))
-        logging.warning(len(fliff_objects))
         return [
             Pick(
                 user_fkey=fo['user_fkey'],
@@ -64,8 +59,6 @@ class PickMapper(MapFunction):
 
 class PickProcess(ProcessFunction):
     def process_element(self, picks: list[Pick], ctx):
-        print('process_element')
-        logging.warning('process_element')
         user_fkeys = {p.user_fkey for p in picks}
         stats = {}
         for u in user_fkeys:
@@ -75,27 +68,17 @@ class PickProcess(ProcessFunction):
                     u_stats.total_risk_amount += p.risk_amount
             stats[u] = u_stats
 
-        print('before yield')
-        logging.warning('before yield')
         yield list(stats.values())
-        print('yield ok')
-        logging.warning('yield ok')
 
 
 class PickRowMapper(FlatMapFunction):
     def flat_map(self, data: list[UserStats]) -> Iterator[Row]:
-        print('flat_map start')
-        logging.warning('flat_map start')
         for st in data:
             yield Row(
                 st.user_fkey,
                 st.total_risk_amount
             )
-            print('flat_map yield ok')
-            logging.warning('flat_map yield ok')
 
-
-# docker run --rm -it confluentinc/cp-kafka kafka-console-producer --bootstrap-server localhost:9092 --topic picks
 
 KAFKA_PROPERTIES = {
     'zookeeper.connect': 'zookeeper:2181',
@@ -121,14 +104,6 @@ kafka_source = (
     .set_value_only_deserializer(SimpleStringSchema())
     .build()
 )
-print('kafka_source setup ok')
-
-# output_path = '/tmp/picks/main'
-# file_sink = FileSink \
-#     .for_row_format(output_path, Encoder.simple_string_encoder('UTF-8')) \
-#     .with_output_file_config(OutputFileConfig.builder().with_part_prefix('pre').with_part_suffix('suf').build()) \
-#     .build()
-print('file_sink setup ok')
 
 
 def sink_to_db(ds: DataStream) -> None:
@@ -175,6 +150,7 @@ def sink_to_db(ds: DataStream) -> None:
      .add_sink(jdbc_sink)
      .uid('jdbc_sink_id'))
 
+
 ds = env.from_source(
     kafka_source,
     WatermarkStrategy.no_watermarks(),
@@ -188,4 +164,4 @@ ds = ds.map(
 sink_to_db(ds)
 
 # Execute
-env.execute("2-picks")
+env.execute("user-stats")
