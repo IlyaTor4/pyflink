@@ -1,3 +1,4 @@
+import os
 from typing import Iterator
 
 from pyflink.common import Row
@@ -17,77 +18,67 @@ from pyflink.datastream.connectors import kafka
 @dataclass
 class Pick:
     user_fkey: str
-    type: int
-    currency_code: int
+    user_id: int
     risk_amount: int
-    us_coeff: int
-    expected_payout_amount: int
-    selections_count: int
-    stake_category: int
     settlement_state: int
-    settlement_stamp_millis_utc: int
-    settlement_payout_amount: int
+    currency_code: int
+    created_stamp_millis_utc: int
 
 
 @dataclass
 class UserStats:
-    user_fkey: str
+    user_id: int
+    total_picks: int
     total_risk_amount: int
+    won: int
+    loss: int
+    push: int
 
 
 class PickMapper(MapFunction):
     def map(self, data: str):
-        deserialized_data = json.loads(data)
-        fliff_objects = deserialized_data['fliff_objects']
-        return [
-            Pick(
-                user_fkey=fo['user_fkey'],
-                type=fo['type'],
-                currency_code=fo['currency_code'],
-                risk_amount=fo['risk_amount'],
-                us_coeff=fo['us_coeff'],
-                expected_payout_amount=fo['expected_payout_amount'],
-                selections_count=fo['selections_count'],
-                stake_category=fo['stake_category'],
-                settlement_state=fo['settlement_state'],
-                settlement_stamp_millis_utc=fo['settlement_stamp_millis_utc'],
-                settlement_payout_amount=fo['settlement_payout_amount'],
-            )
-            for fo in fliff_objects
-        ]
+        fo = json.loads(data)
+        return Pick(
+            user_fkey=fo['user_fkey'],
+            user_id=int(fo['user_fkey'].split('__')[-1]),
+            risk_amount=fo['risk_amount'],
+            settlement_state=fo['settlement_state'],
+            currency_code=fo['currency_code'],
+            created_stamp_millis_utc=fo['created_stamp_millis_utc'],
+        )
 
 
 class PickProcess(ProcessFunction):
-    def process_element(self, picks: list[Pick], ctx):
-        user_fkeys = {p.user_fkey for p in picks}
-        stats = {}
-        for u in user_fkeys:
-            u_stats = UserStats(u, 0)
-            for p in picks:
-                if p.user_fkey == u:
-                    u_stats.total_risk_amount += p.risk_amount
-            stats[u] = u_stats
-
-        yield list(stats.values())
-
-
-class PickRowMapper(FlatMapFunction):
-    def flat_map(self, data: list[UserStats]) -> Iterator[Row]:
-        for st in data:
-            yield Row(
-                st.user_fkey,
-                st.total_risk_amount
+    def process_element(self, pick: Pick, ctx):
+        u_stats = UserStats(pick.user_id, 0, 0, 0, 0, 0)
+        if pick.currency_code == 333:
+            u_stats = UserStats(
+                pick.user_id,
+                1,
+                pick.risk_amount,
+                1 if pick.settlement_state == 511 else 0,
+                1 if pick.settlement_state == 512 else 0,
+                1 if pick.settlement_state == 513 else 0,
             )
 
+        yield u_stats
 
-KAFKA_PROPERTIES = {
-    'zookeeper.connect': 'zookeeper:2181',
-    'bootstrap.servers': 'kafka:9092',
-    'group.id': 'flink-group-ilya',
-}
-CHECKPOINT_INTERVAL = 1000
-CHECKPOINT_TIMEOUT = 6000
-MIN_INTERVAL_BETWEEN_CHECKPOINTS = 200
+
+class StatsRowMapper(MapFunction):
+    def map(self, data: UserStats):
+        return Row(
+            data.user_id,
+            data.total_picks,
+            data.total_risk_amount,
+            data.won,
+            data.loss,
+            data.push,
+        )
+
+
+CHECKPOINT_INTERVAL = 5000
+CHECKPOINT_TIMEOUT = 60000
+MIN_INTERVAL_BETWEEN_CHECKPOINTS = 2000
 
 env = StreamExecutionEnvironment.get_execution_environment()
 env.enable_checkpointing(CHECKPOINT_INTERVAL)
@@ -97,9 +88,8 @@ env.get_checkpoint_config().set_checkpoint_timeout(CHECKPOINT_TIMEOUT)
 
 kafka_source = (
     kafka.KafkaSource.builder()
-    .set_properties(KAFKA_PROPERTIES)
-    .set_bootstrap_servers('broker:29092')
-    .set_topics('picks')
+    .set_bootstrap_servers('b-1.mskdev01.uw24ta.c4.kafka.us-east-2.amazonaws.com:9092')
+    .set_topics('flink-picks-2')
     .set_starting_offsets(kafka.KafkaOffsetsInitializer.latest())
     .set_value_only_deserializer(SimpleStringSchema())
     .build()
@@ -107,28 +97,36 @@ kafka_source = (
 
 
 def sink_to_db(ds: DataStream) -> None:
-    BATCH_INTERVAL_MS = 2000
+    BATCH_INTERVAL_MS = 5000
     BATCH_SIZE = 100
     MAX_RETRIES = 5
     OUTPUT_TYPE_INFO = Types.ROW(
-        [Types.STRING(), Types.INT()]
+        [Types(), Types.INT(), Types.INT(), Types.INT(), Types.INT(), Types.INT()]
     )
 
     upsert_query = (
-        f'''INSERT INTO user_stats
-        (user_fkey, risk_amount)
-        VALUES (?, ?)
-        ON CONFLICT (user_fkey)
-        DO UPDATE SET risk_amount = user_stats.risk_amount + EXCLUDED.risk_amount'''
+        """INSERT INTO user_stats_v3
+        (user_id, total_picks, total_coins_staked, won, loss, push)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (user_id)
+        DO UPDATE 
+        SET total_picks = user_stats_v3.total_picks + EXCLUDED.total_picks,
+        total_coins_staked = user_stats_v3.total_coins_staked + EXCLUDED.total_coins_staked,
+        won = user_stats_v3.won + EXCLUDED.won,
+        loss = user_stats_v3.loss + EXCLUDED.loss,
+        push = user_stats_v3.push + EXCLUDED.push,
+        """
     )
 
     jdbc_connection_options = (
         JdbcConnectionOptions.JdbcConnectionOptionsBuilder()
         .with_driver_name('org.postgresql.Driver')
-        .with_user_name('postgres')
-        .with_password('postgres')
+        .with_user_name(os.environ['FLINK_DB_USER'])
+        .with_password(os.environ['FLINK_DB_PASSWORD'])
         .with_url(
-            f'jdbc:postgresql://postgres:5432/flinkdb')
+            f'jdbc:postgresql://{os.environ["FLINK_DB_HOST"]}:{os.environ["FLINK_DB_PORT"]}'
+            f'/{os.environ["FLINK_DB_NAME"]}',
+        )
         .build()
     )
     jdbc_execution_options = (
@@ -145,7 +143,7 @@ def sink_to_db(ds: DataStream) -> None:
         jdbc_execution_options=jdbc_execution_options,
     )
     (ds
-     .flat_map(PickRowMapper(), output_type=OUTPUT_TYPE_INFO)
+     .map(StatsRowMapper(), output_type=OUTPUT_TYPE_INFO)
      .uid('picks_mapper_id')
      .add_sink(jdbc_sink)
      .uid('jdbc_sink_id'))
@@ -164,4 +162,4 @@ ds = ds.map(
 sink_to_db(ds)
 
 # Execute
-env.execute("user-stats")
+env.execute("user-stats-run")

@@ -73,21 +73,6 @@ services:
       CONFLUENT_METRICS_ENABLE: "true"
       CONFLUENT_SUPPORT_CUSTOMER_ID: "anonymous"
 
-  flink-python:
-    build:
-      context: .
-    volumes:
-      - ./main.py:/opt/flink/main.py
-    command: bash launch.sh
-
-  consumer:
-    build:
-      context: .
-      dockerfile: dockerfile-consumer
-    volumes:
-      - ./consumer.py:/opt/flink/consumer.py
-    command: python consumer.py
-
   cli-tools:
     image: confluentinc/cp-kafka:6.1.1
     container_name: cli-tools

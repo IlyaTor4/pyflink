@@ -1,13 +1,14 @@
-from pyflink.table import EnvironmentSettings, TableEnvironment
+from pyflink.datastream import StreamExecutionEnvironment
+from pyflink.table import EnvironmentSettings, TableEnvironment, StreamTableEnvironment
+from pyflink.table.expressions import col
 
-# use a stream TableEnvironment to execute the queries
-env_settings = EnvironmentSettings.in_streaming_mode()
-table_env = TableEnvironment.create(env_settings)
+env = StreamExecutionEnvironment.get_execution_environment()
+settings = EnvironmentSettings.in_streaming_mode()
+tenv = StreamTableEnvironment.create(env, settings)
 
-
-table_env.execute_sql("""
+tenv.execute_sql("""
     CREATE TABLE kafka_source (
-        user_fkey STRING, 
+        user_fkey VARCHAR, 
         type INT,
         currency_code INT,
         risk_amount INT,
@@ -21,34 +22,29 @@ table_env.execute_sql("""
     ) WITH (
         'connector' = 'kafka',
         'topic' = 'picks',
-        'properties.bootstrap.servers' = 'broker:29092',
+        'properties.bootstrap.servers' = 'b-1.mskdev01.uw24ta.c4.kafka.us-east-2.amazonaws.com:9092',
         'properties.group.id' = 'flink-group-ilya',
+        'properties.auto.offset.reset' = 'earliest',
         'format' = 'json',
         'json.fail-on-missing-field' = 'false'
     )
 """)
 
-table_env.execute_sql("""
-    CREATE TABLE IF NOT EXISTS user_stats (
-        user_fkey STRING, 
-        risk_amount INT,
-        PRIMARY KEY (user_fkey) NOT ENFORCED
+tenv.execute_sql("""
+    CREATE TABLE print (
+        user_fkey STRING,
+        risk_amount INT
     ) WITH (
-        'connector' = 'jdbc',
-        'url' = 'jdbc:postgresql://postgres:5432/flinkdb',
-        'table-name' = 'user_stats',
-        'driver' = 'org.postgresql.Driver',
-        'username' = 'postgres',
-        'password' = 'postgres',
-        'sink.buffer-flush.max-rows' = '1000',
-        'sink.buffer-flush.interval' = '10000',
-        'sink.max-retries' = '5'
+        'connector' = 'print'
     )
-""").wait()
+""")
 
+source_table = tenv.from_path("kafka_source")
 
-table_env.execute_sql("""
-INSERT INTO user_stats
-SELECT user_fkey, risk_amount 
-FROM kafka_source
-""").wait()
+result_table = source_table.select(col("user_fkey"), col("risk_amount"))
+
+# 5. emit query result to sink table
+# emit a Table API result Table to a sink table:
+result_table.execute_insert("print").wait()
+# or emit results via SQL query:
+# table_env.execute_sql("INSERT INTO print SELECT * FROM datagen").wait()
