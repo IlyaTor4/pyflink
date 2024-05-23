@@ -79,6 +79,21 @@ services:
     entrypoint: "sleep infinity"
     restart: always
 
+  consumer:
+    build:
+      context: .
+      dockerfile: dockerfile-consumer
+    volumes:
+      - ./consumer.py:/opt/flink/consumer.py
+    command: python consumer.py
+
+  flink-python:
+    build:
+      context: .
+    volumes:
+      - ./main.py:/opt/flink/main.py
+    command: bash launch.sh
+
 volumes:
   db:
     driver: local
